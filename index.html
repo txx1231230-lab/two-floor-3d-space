@@ -1,0 +1,553 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>双层第一人称 3D 室内空间 - 修正版</title>
+  <style>
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: #05070b;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  touch-action: none;
+}
+
+#scene {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+}
+
+#hud {
+  position: fixed;
+  left: 16px;
+  top: 14px;
+  z-index: 10;
+  color: white;
+  text-shadow: 0 2px 8px rgba(0,0,0,.8);
+  pointer-events: none;
+}
+
+.title {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.hint {
+  max-width: 520px;
+  font-size: 13px;
+  line-height: 1.45;
+  opacity: .88;
+}
+
+#startButton {
+  position: fixed;
+  z-index: 30;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  border: 0;
+  border-radius: 999px;
+  padding: 14px 24px;
+  font-size: 17px;
+  font-weight: 700;
+  color: white;
+  background: rgba(40, 112, 255, .92);
+  box-shadow: 0 12px 30px rgba(0,0,0,.35);
+}
+
+#startButton:active {
+  transform: translate(-50%, -50%) scale(.97);
+}
+
+#crosshair {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  margin-left: -4px;
+  margin-top: -4px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,.75);
+  z-index: 9;
+  pointer-events: none;
+  opacity: .65;
+}
+
+#mobileControls {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none;
+  display: none;
+}
+
+#joystickBase {
+  position: absolute;
+  left: 24px;
+  bottom: 28px;
+  width: 124px;
+  height: 124px;
+  border-radius: 50%;
+  background: rgba(255,255,255,.12);
+  border: 1px solid rgba(255,255,255,.2);
+  pointer-events: auto;
+  touch-action: none;
+}
+
+#joystickStick {
+  position: absolute;
+  left: 38px;
+  top: 38px;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: rgba(255,255,255,.55);
+  box-shadow: 0 6px 20px rgba(0,0,0,.25);
+}
+
+#lookPad {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 58vw;
+  height: 72vh;
+  color: rgba(255,255,255,.45);
+  font-size: 13px;
+  display: flex;
+  align-items: end;
+  justify-content: end;
+  padding: 28px;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+}
+
+@media (hover: none), (pointer: coarse) {
+  #mobileControls { display: block; }
+  .desktop { display: none; }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .mobile { display: none; }
+}
+
+  </style>
+</head>
+<body>
+  <canvas id="scene"></canvas>
+
+  <div id="hud">
+    <div class="title">双层 3D 室内空间</div>
+    <div class="hint desktop">点击画面锁定鼠标。WASD 移动，鼠标转向，Space 上楼/跳，Shift 加速。</div>
+    <div class="hint mobile">左侧摇杆移动，右侧滑动转向。靠近楼梯会自动沿坡道上下楼。</div>
+  </div>
+
+  <button id="startButton">进入空间</button>
+
+  <div id="mobileControls">
+    <div id="joystickBase"><div id="joystickStick"></div></div>
+    <div id="lookPad">滑动转向</div>
+  </div>
+
+  <div id="crosshair"></div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.165.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.165.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script type="module">
+import * as THREE from 'three';
+
+const canvas = document.querySelector('#scene');
+const startButton = document.querySelector('#startButton');
+const joystickBase = document.querySelector('#joystickBase');
+const joystickStick = document.querySelector('#joystickStick');
+const lookPad = document.querySelector('#lookPad');
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b1020);
+scene.fog = new THREE.Fog(0x0b1020, 35, 88);
+
+const camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.1, 220);
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25));
+renderer.shadowMap.enabled = false;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+const player = {
+  position: new THREE.Vector3(-8, 1.7, 8),
+  velocity: new THREE.Vector3(),
+  yaw: -0.65,
+  pitch: 0,
+  height: 1.7,
+  radius: 0.24,
+  speed: 4.6,
+  sprint: 6.8,
+};
+
+const keys = new Set();
+const colliders = [];
+const interactables = [];
+const clock = new THREE.Clock();
+const pointer = new THREE.Vector2();
+const raycaster = new THREE.Raycaster();
+let isLocked = false;
+let joystick = { x: 0, y: 0, activeId: null };
+let lastLook = null;
+
+const materials = {
+  floor: new THREE.MeshStandardMaterial({ color: 0x8b7f68, roughness: 0.72, metalness: 0.03 }),
+  upstairsFloor: new THREE.MeshStandardMaterial({ color: 0x7d8a92, roughness: 0.68, metalness: 0.02 }),
+  wall: new THREE.MeshStandardMaterial({ color: 0xe7dfd2, roughness: 0.86 }),
+  accent: new THREE.MeshStandardMaterial({ color: 0x3d5a80, roughness: 0.6 }),
+  glass: new THREE.MeshPhysicalMaterial({ color: 0x9ed8ff, transparent: true, opacity: 0.22, roughness: 0.05, transmission: 0.1 }),
+  wood: new THREE.MeshStandardMaterial({ color: 0x815b3a, roughness: 0.58 }),
+  dark: new THREE.MeshStandardMaterial({ color: 0x262a35, roughness: 0.5 }),
+  sofa: new THREE.MeshStandardMaterial({ color: 0x556b7d, roughness: 0.8 }),
+  bed: new THREE.MeshStandardMaterial({ color: 0xd7d1c6, roughness: 0.9 }),
+  plant: new THREE.MeshStandardMaterial({ color: 0x2f7d4e, roughness: 0.75 }),
+};
+
+function box(name, size, pos, mat, cast = true, receive = true, collide = false) {
+  const geometry = new THREE.BoxGeometry(size.x, size.y, size.z);
+  const mesh = new THREE.Mesh(geometry, mat);
+  mesh.name = name;
+  mesh.position.copy(pos);
+  mesh.castShadow = cast;
+  mesh.receiveShadow = receive;
+  scene.add(mesh);
+  if (collide) {
+    // 只让真正会挡路的结构参与碰撞；家具和地板不挡路，避免室内移动卡顿和过窄通道卡住。
+    const blocksMovement = name.includes('墙') || name.includes('栏杆') || name.includes('扶手');
+    if (blocksMovement) {
+      mesh.updateMatrixWorld(true);
+      const bounds = new THREE.Box3().setFromObject(mesh);
+      colliders.push({ name, bounds });
+    }
+  }
+  return mesh;
+}
+
+function addLabel(text, position) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = 'rgba(11, 16, 32, 0.76)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = 'white';
+  ctx.font = 'bold 42px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+  const texture = new THREE.CanvasTexture(canvas);
+  const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(3.8, .95), material);
+  mesh.position.copy(position);
+  mesh.rotation.y = Math.PI;
+  scene.add(mesh);
+}
+
+function buildSpace() {
+  const ambient = new THREE.HemisphereLight(0xffffff, 0x556070, 1.5);
+  scene.add(ambient);
+
+  const sun = new THREE.DirectionalLight(0xffffff, 2.8);
+  sun.position.set(-14, 22, 10);
+  sun.castShadow = false;
+  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.camera.near = 1;
+  sun.shadow.camera.far = 70;
+  sun.shadow.camera.left = -35;
+  sun.shadow.camera.right = 35;
+  sun.shadow.camera.top = 35;
+  sun.shadow.camera.bottom = -35;
+  scene.add(sun);
+
+  const warmLightPositions = [[-9, 3.8, 5], [3, 3.8, 7], [10, 7.1, -5], [-5, 7.1, -8], [8, 3.8, -10]];
+  for (const p of warmLightPositions) {
+    const light = new THREE.PointLight(0xffdfb0, 1.6, 14, 1.6);
+    light.position.set(...p);
+    light.castShadow = false;
+    scene.add(light);
+    box('吊灯', new THREE.Vector3(.38, .08, .38), new THREE.Vector3(p[0], p[1] - .25, p[2]), materials.dark, true, false, false);
+  }
+
+  box('一层大地板', new THREE.Vector3(28, .28, 24), new THREE.Vector3(0, -0.14, 0), materials.floor, false, true, true);
+  box('二层平台', new THREE.Vector3(24, .28, 18), new THREE.Vector3(1, 4.86, -3), materials.upstairsFloor, false, true, true);
+
+  const wallH = 3.1;
+  box('一层北墙', new THREE.Vector3(28.4, wallH, .35), new THREE.Vector3(0, wallH/2, -12), materials.wall, true, true, true);
+  box('一层南墙', new THREE.Vector3(28.4, wallH, .35), new THREE.Vector3(0, wallH/2, 12), materials.wall, true, true, true);
+  box('一层西墙', new THREE.Vector3(.35, wallH, 24.4), new THREE.Vector3(-14, wallH/2, 0), materials.wall, true, true, true);
+  box('一层东墙', new THREE.Vector3(.35, wallH, 24.4), new THREE.Vector3(14, wallH/2, 0), materials.wall, true, true, true);
+
+  const wallH2 = 3.0;
+  box('二层北墙', new THREE.Vector3(24.4, wallH2, .35), new THREE.Vector3(1, 5 + wallH2/2, -12), materials.wall, true, true, true);
+  box('二层南半墙', new THREE.Vector3(11.5, wallH2, .35), new THREE.Vector3(-5.4, 5 + wallH2/2, 6), materials.wall, true, true, true);
+  box('二层南半墙2', new THREE.Vector3(7.8, wallH2, .35), new THREE.Vector3(8.1, 5 + wallH2/2, 6), materials.wall, true, true, true);
+  box('二层西墙', new THREE.Vector3(.35, wallH2, 18.4), new THREE.Vector3(-11, 5 + wallH2/2, -3), materials.wall, true, true, true);
+  box('二层东墙', new THREE.Vector3(.35, wallH2, 18.4), new THREE.Vector3(13, 5 + wallH2/2, -3), materials.wall, true, true, true);
+
+  // Room dividers with door gaps.
+  box('客厅厨房隔墙A', new THREE.Vector3(.28, 2.8, 7.6), new THREE.Vector3(-2.4, 1.4, -8.1), materials.wall, true, true, true);
+  box('客厅厨房隔墙B', new THREE.Vector3(.28, 2.8, 3.6), new THREE.Vector3(-2.4, 1.4, 6.1), materials.wall, true, true, true);
+  box('书房隔墙', new THREE.Vector3(8.8, 2.8, .28), new THREE.Vector3(8.4, 1.4, -2.2), materials.wall, true, true, true);
+  box('二层卧室隔墙', new THREE.Vector3(.28, 2.8, 9.8), new THREE.Vector3(2.3, 6.4, -7.1), materials.wall, true, true, true);
+  box('二层展廊隔墙', new THREE.Vector3(10, 2.8, .28), new THREE.Vector3(-5.8, 6.4, -4.2), materials.wall, true, true, true);
+
+  // Stair ramp and rails.
+  const rampGeo = new THREE.BoxGeometry(4.2, .32, 9.4);
+  const ramp = new THREE.Mesh(rampGeo, materials.wood);
+  ramp.name = '楼梯坡道';
+  ramp.position.set(-7.8, 2.42, -3.7);
+  ramp.rotation.x = -Math.atan2(5, 9.4);
+  ramp.castShadow = true;
+  ramp.receiveShadow = true;
+  scene.add(ramp);
+  box('楼梯左扶手', new THREE.Vector3(.18, .72, 9.6), new THREE.Vector3(-10.02, 2.98, -3.7), materials.dark, true, true, true);
+  box('楼梯右扶手', new THREE.Vector3(.18, .72, 9.6), new THREE.Vector3(-5.58, 2.98, -3.7), materials.dark, true, true, true);
+  for (let i = 0; i < 11; i++) {
+    const z = .9 - i * .85;
+    const y = .35 + i * .45;
+    box('楼梯踏步', new THREE.Vector3(4.3, .08, .12), new THREE.Vector3(-7.8, y, z), materials.dark, true, true, false);
+  }
+
+  // Balcony railing / atrium edge.
+  box('二层栏杆前', new THREE.Vector3(12.8, .8, .16), new THREE.Vector3(1.6, 5.35, 5.9), materials.dark, true, true, true);
+  box('二层栏杆侧', new THREE.Vector3(.16, .8, 5.4), new THREE.Vector3(-4.9, 5.35, 3.25), materials.dark, true, true, true);
+
+  // Windows.
+  box('一层落地窗', new THREE.Vector3(7.2, 2.2, .08), new THREE.Vector3(6.6, 1.55, 11.79), materials.glass, false, false, false);
+  box('二层长窗', new THREE.Vector3(8.4, 1.8, .08), new THREE.Vector3(5.2, 6.75, -11.79), materials.glass, false, false, false);
+  box('书房窗', new THREE.Vector3(.08, 1.9, 4.4), new THREE.Vector3(13.79, 1.6, -7.2), materials.glass, false, false, false);
+
+  // Furniture: living room.
+  box('沙发主体', new THREE.Vector3(4.6, .72, 1.45), new THREE.Vector3(-7.5, .5, 6.8), materials.sofa, true, true, true);
+  box('沙发靠背', new THREE.Vector3(4.8, 1.05, .35), new THREE.Vector3(-7.5, .9, 7.55), materials.sofa, true, true, true);
+  box('茶几', new THREE.Vector3(2.7, .32, 1.4), new THREE.Vector3(-7.5, .45, 4.6), materials.wood, true, true, true);
+  box('电视墙', new THREE.Vector3(4.8, 1.8, .16), new THREE.Vector3(-7.5, 1.45, 0.85), materials.dark, true, true, true);
+
+  // Kitchen / dining.
+  box('厨房岛台', new THREE.Vector3(4.3, .95, 1.5), new THREE.Vector3(4.4, .55, 6.6), materials.wood, true, true, true);
+  box('餐桌', new THREE.Vector3(3.3, .24, 1.55), new THREE.Vector3(5.3, .82, 2.9), materials.wood, true, true, true);
+  for (const x of [3.9, 6.7]) for (const z of [2.2, 3.6]) box('餐椅', new THREE.Vector3(.55, .75, .55), new THREE.Vector3(x, .42, z), materials.dark, true, true, true);
+  box('橱柜', new THREE.Vector3(6.8, 1.2, .7), new THREE.Vector3(8.1, .7, 10.9), materials.accent, true, true, true);
+
+  // Study and utility room.
+  box('书桌', new THREE.Vector3(3.2, .28, 1.1), new THREE.Vector3(9.2, .82, -8.4), materials.wood, true, true, true);
+  box('书架', new THREE.Vector3(4.2, 2.2, .55), new THREE.Vector3(11.3, 1.25, -11.3), materials.dark, true, true, true);
+  box('工作椅', new THREE.Vector3(.7, .9, .7), new THREE.Vector3(9.2, .52, -6.9), materials.sofa, true, true, true);
+  box('储物柜', new THREE.Vector3(2.8, 1.6, .7), new THREE.Vector3(12.1, .9, .4), materials.accent, true, true, true);
+
+  // Upstairs bedrooms/gallery.
+  box('主卧床', new THREE.Vector3(3.8, .65, 2.5), new THREE.Vector3(8.0, 5.35, -8.6), materials.bed, true, true, true);
+  box('主卧床头', new THREE.Vector3(4.1, 1.2, .35), new THREE.Vector3(8.0, 5.8, -10.1), materials.wood, true, true, true);
+  box('衣柜', new THREE.Vector3(3.4, 2.2, .6), new THREE.Vector3(11.1, 6.1, -2.1), materials.dark, true, true, true);
+  box('次卧床', new THREE.Vector3(3.4, .58, 2.2), new THREE.Vector3(-5.8, 5.32, -9.0), materials.bed, true, true, true);
+  box('画廊长凳', new THREE.Vector3(3.6, .45, .8), new THREE.Vector3(-5.8, 5.35, .8), materials.wood, true, true, true);
+  for (const x of [-9, -6.2, -3.4]) {
+    box('墙上画框', new THREE.Vector3(1.3, .9, .08), new THREE.Vector3(x, 6.7, -4.03), materials.accent, true, false, false);
+  }
+
+  // Plants / decorative pillars.
+  for (const p of [[-12, .6, 10], [12, .6, 10], [11.6, 5.6, 4.4], [-9.5, 5.6, -10.2]]) {
+    box('花盆', new THREE.Vector3(.7, .55, .7), new THREE.Vector3(p[0], p[1], p[2]), materials.wood, true, true, true);
+    const leaves = new THREE.Mesh(new THREE.SphereGeometry(.72, 18, 14), materials.plant);
+    leaves.position.set(p[0], p[1] + .75, p[2]);
+    leaves.castShadow = true;
+    scene.add(leaves);
+  }
+
+  addLabel('客厅 / Living Room', new THREE.Vector3(-7.5, 2.2, 1.05));
+  addLabel('厨房餐厅 / Kitchen', new THREE.Vector3(5.5, 2.2, 10.7));
+  addLabel('书房 / Study', new THREE.Vector3(10.9, 2.05, -2.0));
+  addLabel('二层卧室区 / Bedrooms', new THREE.Vector3(7.7, 7.0, -11.7));
+  addLabel('展廊 / Gallery', new THREE.Vector3(-6.0, 7.0, -4.0));
+
+  const grid = new THREE.GridHelper(40, 40, 0x6f7f9f, 0x293043);
+  grid.position.y = .01;
+  scene.add(grid);
+}
+
+function floorHeightAt(x, z) {
+  // Smooth staircase ramp: lower at z≈1, upper at z≈-8.4, between x -10.2 and -5.4.
+  if (x > -10.4 && x < -5.2 && z < 1.0 && z > -8.6) {
+    const t = THREE.MathUtils.clamp((1.0 - z) / 9.6, 0, 1);
+    return t * 5;
+  }
+  if (x > -11.2 && x < 13.2 && z > -12.2 && z < 6.2) {
+    if (x > -5.2 || z < -4.8) return 5;
+  }
+  return 0;
+}
+
+function canMoveTo(pos) {
+  const yFloor = floorHeightAt(pos.x, pos.z);
+  const playerBox = new THREE.Box3(
+    new THREE.Vector3(pos.x - player.radius, yFloor + .05, pos.z - player.radius),
+    new THREE.Vector3(pos.x + player.radius, yFloor + player.height, pos.z + player.radius)
+  );
+  for (const item of colliders) {
+    const c = item.bounds;
+    if (playerBox.intersectsBox(c)) {
+      const size = new THREE.Vector3();
+      c.getSize(size);
+      if (size.y > .45 && c.max.y > yFloor + .45) return false;
+    }
+  }
+  return true;
+}
+
+function updatePlayer(dt) {
+  const forward = new THREE.Vector3(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
+  const right = new THREE.Vector3(Math.cos(player.yaw), 0, -Math.sin(player.yaw));
+  const input = new THREE.Vector3();
+
+  if (keys.has('KeyW') || keys.has('ArrowUp')) input.add(forward);
+  if (keys.has('KeyS') || keys.has('ArrowDown')) input.sub(forward);
+  if (keys.has('KeyD') || keys.has('ArrowRight')) input.add(right);
+  if (keys.has('KeyA') || keys.has('ArrowLeft')) input.sub(right);
+
+  if (Math.abs(joystick.x) > .02 || Math.abs(joystick.y) > .02) {
+    input.addScaledVector(right, joystick.x);
+    input.addScaledVector(forward, -joystick.y);
+  }
+
+  if (input.lengthSq() > 0) input.normalize();
+  const speed = keys.has('ShiftLeft') || keys.has('ShiftRight') ? player.sprint : player.speed;
+  const next = player.position.clone();
+  next.x += input.x * speed * dt;
+  next.z += input.z * speed * dt;
+
+  const testX = player.position.clone();
+  testX.x = next.x;
+  if (canMoveTo(testX)) player.position.x = testX.x;
+  const testZ = player.position.clone();
+  testZ.z = next.z;
+  if (canMoveTo(testZ)) player.position.z = testZ.z;
+
+  const targetY = floorHeightAt(player.position.x, player.position.z) + player.height;
+  player.position.y = THREE.MathUtils.lerp(player.position.y, targetY, 9 * dt);
+
+  camera.position.copy(player.position);
+  camera.rotation.order = 'YXZ';
+  camera.rotation.y = player.yaw;
+  camera.rotation.x = player.pitch;
+}
+
+function animate() {
+  const dt = Math.min(clock.getDelta(), 0.033);
+  updatePlayer(dt);
+
+  const t = performance.now() * 0.001;
+  for (const obj of interactables) obj.rotation.y = Math.sin(t) * .08;
+
+  renderer.render(scene, camera);
+  requestAnimationFrame(animate);
+}
+
+function setupControls() {
+  startButton.addEventListener('click', () => {
+    startButton.style.display = 'none';
+    if (document.body.requestPointerLock && matchMedia('(hover:hover) and (pointer:fine)').matches) {
+      document.body.requestPointerLock();
+    }
+  });
+
+  document.addEventListener('pointerlockchange', () => { isLocked = document.pointerLockElement === document.body; });
+
+  document.addEventListener('keydown', e => keys.add(e.code));
+  document.addEventListener('keyup', e => keys.delete(e.code));
+
+  document.addEventListener('mousemove', e => {
+    if (!isLocked) return;
+    player.yaw -= e.movementX * 0.0024;
+    player.pitch -= e.movementY * 0.0020;
+    player.pitch = THREE.MathUtils.clamp(player.pitch, -1.2, 1.2);
+  });
+
+  joystickBase.addEventListener('pointerdown', e => {
+    joystick.activeId = e.pointerId;
+    joystickBase.setPointerCapture(e.pointerId);
+    updateJoystick(e);
+  });
+  joystickBase.addEventListener('pointermove', e => {
+    if (e.pointerId === joystick.activeId) updateJoystick(e);
+  });
+  joystickBase.addEventListener('pointerup', resetJoystick);
+  joystickBase.addEventListener('pointercancel', resetJoystick);
+
+  lookPad.addEventListener('pointerdown', e => {
+    lastLook = { id: e.pointerId, x: e.clientX, y: e.clientY };
+    lookPad.setPointerCapture(e.pointerId);
+    startButton.style.display = 'none';
+  });
+  lookPad.addEventListener('pointermove', e => {
+    if (!lastLook || e.pointerId !== lastLook.id) return;
+    const dx = e.clientX - lastLook.x;
+    const dy = e.clientY - lastLook.y;
+    lastLook.x = e.clientX;
+    lastLook.y = e.clientY;
+    player.yaw -= dx * 0.006;
+    player.pitch -= dy * 0.0045;
+    player.pitch = THREE.MathUtils.clamp(player.pitch, -1.2, 1.2);
+  });
+  lookPad.addEventListener('pointerup', () => { lastLook = null; });
+  lookPad.addEventListener('pointercancel', () => { lastLook = null; });
+}
+
+function updateJoystick(e) {
+  const rect = joystickBase.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  const max = rect.width * .34;
+  let dx = e.clientX - cx;
+  let dy = e.clientY - cy;
+  const len = Math.hypot(dx, dy);
+  if (len > max) {
+    dx = dx / len * max;
+    dy = dy / len * max;
+  }
+  joystick.x = dx / max;
+  joystick.y = dy / max;
+  joystickStick.style.transform = `translate(${dx}px, ${dy}px)`;
+}
+
+function resetJoystick() {
+  joystick = { x: 0, y: 0, activeId: null };
+  joystickStick.style.transform = 'translate(0, 0)';
+}
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25));
+});
+
+buildSpace();
+setupControls();
+animate();
+
+  </script>
+</body>
+</html>
